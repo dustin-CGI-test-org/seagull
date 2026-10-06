@@ -1,0 +1,15 @@
+name: Notify fork
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    # Prevents this from running in the fork once it gets synced over
+    if: github.repository == 'dustin-broussard-CGI/seagull'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.FORK_DISPATCH_TOKEN }}
+        run: gh api repos/dustinpb97/seagull-fork/dispatches -f event_type=upstream-updated
