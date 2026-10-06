@@ -1,8 +1,10 @@
-name: Propose upstream sync
+name: Upstream sync
 
 on:
+  repository_dispatch:
+    types: [upstream-updated]
   schedule:
-    - cron: "38 */1 * * *" # Every 6 hours, UTC
+    - cron: "38 */6 * * *"
   workflow_dispatch:
 
 permissions:
