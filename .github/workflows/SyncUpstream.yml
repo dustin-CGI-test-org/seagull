@@ -1,0 +1,105 @@
+name: Sync Upstream
+
+on:
+  repository_dispatch:
+    types: [upstream-updated]
+  workflow_dispatch:
+
+# All GitHub access goes through the GitHub App token below,
+# so the built-in token needs almost nothing.
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync-pr
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO: seagull # Name of the upstream repo (same org as this fork)
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            ${{ env.UPSTREAM_REPO }}
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Create or update upstream sync PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          TARGET_BRANCH="${{ github.event.repository.default_branch }}"
+          SYNC_BRANCH="sync/upstream"
+
+          PARENT_REPO="$(
+            gh api "repos/${GITHUB_REPOSITORY}" --jq '.parent.full_name'
+          )"
+
+          if [ -z "$PARENT_REPO" ] || [ "$PARENT_REPO" = "null" ]; then
+            echo "This repository does not appear to be a fork."
+            exit 1
+          fi
+
+          SOURCE_BRANCH="$(
+            gh api "repos/${PARENT_REPO}" --jq '.default_branch'
+          )"
+
+          git remote add upstream "https://github.com/${PARENT_REPO}.git"
+          git fetch origin "${TARGET_BRANCH}"
+          git fetch upstream "${SOURCE_BRANCH}"
+
+          # Stop when the fork already contains the latest upstream commit.
+          if git merge-base --is-ancestor \
+            "upstream/${SOURCE_BRANCH}" \
+            "origin/${TARGET_BRANCH}"; then
+            echo "Fork is already up to date."
+            exit 0
+          fi
+
+          # Safely update the dedicated sync branch.
+          REMOTE_SHA="$(
+            git ls-remote --heads origin "refs/heads/${SYNC_BRANCH}" |
+            cut -f1
+          )"
+
+          git push origin \
+            --force-with-lease="refs/heads/${SYNC_BRANCH}:${REMOTE_SHA}" \
+            "upstream/${SOURCE_BRANCH}:refs/heads/${SYNC_BRANCH}"
+
+          # Update the existing PR through its branch, or create a new one.
+          PR_URL="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base "${TARGET_BRANCH}" \
+              --head "${SYNC_BRANCH}" \
+              --state open \
+              --json url \
+              --jq '.[0].url // empty'
+          )"
+
+          if [ -n "$PR_URL" ]; then
+            echo "Updated existing PR: $PR_URL"
+          else
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base "${TARGET_BRANCH}" \
+              --head "${SYNC_BRANCH}" \
+              --title "Sync changes from upstream" \
+              --body "Automated proposal to sync \`${PARENT_REPO}:${SOURCE_BRANCH}\` into this fork. Review and merge this PR manually."
+          fi
