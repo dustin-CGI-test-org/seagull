@@ -4,12 +4,32 @@ on:
   push:
     branches: [main]
 
+permissions: {}
+
+env:
+  UPSTREAM_REPO: seagull   # This repo's name
+  FORK_REPO: seagull-fork  # CHANGE THIS to your fork's name (same org)
+
 jobs:
   notify:
-    # Prevents this from running in the fork once it gets synced over
-    if: github.repository == 'dustin-broussard-CGI/seagull'
+    # Only run in the upstream repo. This file gets synced into the fork,
+    # and this check keeps it from running there.
+    if: github.event.repository.name == 'seagull'
     runs-on: ubuntu-latest
+
     steps:
-      - env:
-          GH_TOKEN: ${{ secrets.FORK_DISPATCH_TOKEN }}
-        run: gh api repos/dustinpb97/seagull-fork/dispatches -f event_type=upstream-updated
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ env.FORK_REPO }}
+
+      - name: Trigger sync in fork
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY_OWNER}/${FORK_REPO}/dispatches" \
+            -f event_type=upstream-updated
