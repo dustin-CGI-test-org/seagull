@@ -1,0 +1,15 @@
+# initialize new repo
+
+# start on old repo
+git subtree split --prefix=path/to/subdir -b split-branch
+
+Then push split-branch to the new repo as main. Done.
+
+# for updating new repo
+
+# in the original repo
+git subtree push --prefix=path/to/subdir https://github.com/you/new-repo.git sync-branch
+
+# in the new repo
+git fetch origin
+git merge origin/sync-branch
