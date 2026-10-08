@@ -1,0 +1,102 @@
+# NEW repo: .github/workflows/sync-from-original.yml
+#
+# Runs when the original repo reports a change to the subdirectory. It clones
+# the original, re-splits the subdirectory history, and merges it into this
+# repo (a fast-forward when this repo has no commits of its own).
+# Authenticates as a GitHub App for both the clone and the push.
+#
+# This file must be on the new repo's DEFAULT branch, or the
+# repository_dispatch event will not trigger it.
+#
+# Setup:
+#   1. Replace the values marked CHANGE ME below.
+#   2. Make these available to this repo (repo-level, or org-level limited
+#      to the two repos):
+#        variable  SUBDIR_SYNC_APP_CLIENT_ID    the App's Client ID
+#        secret    SUBDIR_SYNC_APP_PRIVATE_KEY  full contents of the App's .pem key
+#   3. The App needs "Contents: Read and write" and must be installed on
+#      both repos.
+
+name: Sync from original repo
+
+on:
+  repository_dispatch:
+    types: [subdir-updated]
+  workflow_dispatch:                       # lets you run a sync by hand
+
+permissions: {}                            # the built-in GITHUB_TOKEN is not used
+
+concurrency:
+  group: subdir-sync                       # never run two syncs at once
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPO: YOUR_ORG/ORIGINAL_REPO      # CHANGE ME (must be in the same org)
+  SOURCE_BRANCH: main                      # CHANGE ME if needed
+  SUBDIR: path/to/subdir                   # CHANGE ME (no trailing slash)
+  TARGET_BRANCH: main                      # CHANGE ME if needed
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create a GitHub App token for both repos
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SUBDIR_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SUBDIR_SYNC_APP_PRIVATE_KEY }}
+          repositories: |
+            ${{ env.SOURCE_REPO }}
+            ${{ github.repository }}
+          permission-contents: write       # read the original, push to this repo
+
+      - name: Look up the App's bot user ID (for commit attribution)
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: echo "user-id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the original repo with full history
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_BRANCH }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0                   # subtree split needs every commit
+          path: source
+          persist-credentials: false
+
+      - name: Split out the subdirectory history
+        working-directory: source
+        run: git subtree split --prefix="$SUBDIR" -b subdir-split
+
+      - name: Check out this repo
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          token: ${{ steps.app-token.outputs.token }}   # push as the App
+          fetch-depth: 0
+          path: target
+
+      - name: Merge the split history and push
+        working-directory: target
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BOT_USER_ID: ${{ steps.bot.outputs.user-id }}
+        run: |
+          git config user.name  "${APP_SLUG}[bot]"
+          git config user.email "${BOT_USER_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+
+          git fetch ../source subdir-split
+
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "Already up to date; nothing to sync."
+            exit 0
+          fi
+
+          # Fast-forwards when possible; otherwise creates a merge commit.
+          # A conflict fails the job so you can resolve it by hand.
+          git merge --no-edit FETCH_HEAD
+          git push origin "HEAD:${TARGET_BRANCH}"

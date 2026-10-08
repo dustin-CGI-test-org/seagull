@@ -1,0 +1,50 @@
+# ORIGINAL repo: .github/workflows/notify-subdir-sync.yml
+#
+# Fires when the subdirectory changes on the default branch and tells the
+# new repo to pull the changes in. Authenticates as a GitHub App.
+#
+# Setup:
+#   1. Replace the three values marked CHANGE ME below.
+#   2. Make these available to this repo (repo-level, or org-level limited
+#      to the two repos):
+#        variable  SUBDIR_SYNC_APP_CLIENT_ID    the App's Client ID
+#        secret    SUBDIR_SYNC_APP_PRIVATE_KEY  full contents of the App's .pem key
+#   3. The App needs "Contents: Read and write" and must be installed on
+#      both repos.
+
+name: Notify new repo of subdirectory changes
+
+on:
+  push:
+    branches: [main]                 # CHANGE ME if your default branch differs
+    paths:
+      - 'path/to/subdir/**'          # CHANGE ME
+  workflow_dispatch:                 # lets you trigger a sync by hand
+
+permissions: {}                      # the built-in GITHUB_TOKEN is not used
+
+env:
+  TARGET_REPO: YOUR_ORG/NEW_REPO     # CHANGE ME (must be in the same org)
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create a GitHub App token scoped to the new repo
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SUBDIR_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SUBDIR_SYNC_APP_PRIVATE_KEY }}
+          repositories: ${{ env.TARGET_REPO }}
+          permission-contents: write   # required to send repository_dispatch
+
+      - name: Send repository_dispatch to the new repo
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/${TARGET_REPO}/dispatches" \
+            --method POST \
+            -f event_type=subdir-updated \
+            -f "client_payload[sha]=${SOURCE_SHA}"
