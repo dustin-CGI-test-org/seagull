@@ -17,7 +17,7 @@ on:
   push:
     branches: [develop]
     paths:
-      - 'seagull-subdir/**'
+      - 'subdir/**'
   workflow_dispatch:                 # lets you trigger a sync by hand
 
 permissions: {}
