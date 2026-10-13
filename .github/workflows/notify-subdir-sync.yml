@@ -1,0 +1,49 @@
+# ORIGINAL repo: .github/workflows/notify-subdir-sync.yml
+#
+# Fires when the subdirectory changes on the default branch and tells the
+# new repo to pull the changes in. Authenticates as a GitHub App.
+#
+# Setup:
+#   1. Make these available to this repo (repo-level, or org-level limited
+#      to the two repos):
+#        variable  SUBDIR_SYNC_APP_CLIENT_ID    the App's Client ID
+#        secret    SUBDIR_SYNC_APP_PRIVATE_KEY  full contents of the App's .pem key
+#   2. The App needs "Contents: Read and write" and must be installed on
+#      both repos.
+
+name: Notify new repo of subdirectory changes
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'seagull-subdir/**'
+  workflow_dispatch:                 # lets you trigger a sync by hand
+
+permissions: {}
+
+env:
+  TARGET_REPO: dustin-CGI-test-org/seagull-2
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create a GitHub App token scoped to the new repo
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SUBDIR_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SUBDIR_SYNC_APP_PRIVATE_KEY }}
+          repositories: ${{ env.TARGET_REPO }}
+          permission-contents: write   # required to send repository_dispatch
+
+      - name: Send repository_dispatch to the new repo
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/${TARGET_REPO}/dispatches" \
+            --method POST \
+            -f event_type=subdir-updated \
+            -f "client_payload[sha]=${SOURCE_SHA}"
